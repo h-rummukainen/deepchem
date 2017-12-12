@@ -106,13 +106,17 @@ class Environment(object):
 class GymEnvironment(Environment):
   """This is a convenience class for working with environments from OpenAI Gym."""
 
-  def __init__(self, name):
+  def __init__(self, name, env=None, state_dtype=None):
     """Create an Environment wrapping the OpenAI Gym environment with a specified name."""
-    import gym
-    self.env = gym.make(name)
+    if env is None:
+      import gym
+      self.env = gym.make(name)
+    else:
+      self.env = env
     self.name = name
     super(GymEnvironment, self).__init__(self.env.observation_space.shape,
-                                         self.env.action_space.n)
+                                         self.env.action_space.n,
+                                         state_dtype=state_dtype)
 
   def reset(self):
     self._state = self.env.reset()
