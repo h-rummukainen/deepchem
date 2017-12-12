@@ -232,11 +232,12 @@ class PPO(object):
       workers = []
       threads = []
       for i in range(self.optimization_rollouts):
-        workers.append(_Worker(self, i))
+        workers.append(_Worker(self, i, (self._env if i==0
+                                         else copy.deepcopy(self._env))))
       self._session.run(tf.global_variables_initializer())
       if restore:
         self.restore()
-      pool = Pool()
+      pool = Pool() if len(workers) > 1 else None
       variables = tf.get_collection(
           tf.GraphKeys.GLOBAL_VARIABLES, scope='global')
       saver = tf.train.Saver(variables, max_to_keep=max_checkpoints_to_keep)
@@ -246,7 +247,10 @@ class PPO(object):
         # Have the worker threads generate the rollouts for this iteration.
 
         rollouts = []
-        pool.map(lambda x: rollouts.extend(x.run()), workers)
+        if len(workers) > 1:
+          pool.map(lambda x: rollouts.extend(x.run()), workers)
+        else:
+          rollouts.extend(workers[0].run())
 
         # Perform optimization.
 
@@ -429,11 +433,11 @@ class PPO(object):
 class _Worker(object):
   """A Worker object is created for each training thread."""
 
-  def __init__(self, ppo, index):
+  def __init__(self, ppo, index, env):
     self.ppo = ppo
     self.index = index
     self.scope = 'worker%d' % index
-    self.env = copy.deepcopy(ppo._env)
+    self.env = env
     self.env.reset()
     self.graph, self.features, self.rewards, self.actions, self.action_prob, self.value, self.advantages, self.old_action_prob = ppo._build_graph(
         ppo._graph._get_tf('Graph'), self.scope, None)
