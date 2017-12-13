@@ -102,6 +102,29 @@ class Environment(object):
     """
     raise NotImplemented("Subclasses must implement this")
 
+  def step_smdp(self, action):
+    """Take an action of nondeterministic duration in the environment.
+
+    This is an analogue of the step() method for environments modelled
+    as semi-Markov decision processes (SMDP).
+    This method causes the "state" and "terminated" properties to be updated.
+
+    Parameters
+    ----------
+    action: object
+      an object describing the action to take
+
+    Returns
+    -------
+    reward:
+       the reward earned by taking the action, represented as a floating point
+       number (higher values are better)
+    duration:
+       the time spent in the preceding state, or simply 1.0 in a discrete-time
+       setting
+    """
+    return (self.step(action), 1.0)
+
 
 class GymEnvironment(Environment):
   """This is a convenience class for working with environments from OpenAI Gym."""
@@ -124,7 +147,16 @@ class GymEnvironment(Environment):
 
   def step(self, action):
     self._state, reward, self._terminated, info = self.env.step(action)
+    duration = info.get('step_time', 1.0)
+    if duration != 1.0:
+      raise Exception("Trying to step in discrete time, but got duration {}"
+                      .format(duration))
     return reward
+
+  def step_smdp(self, action):
+    self._state, reward, self._terminated, info = self.env.step(action)
+    duration = info.get('step_time', 1.0)
+    return (reward, duration)
 
 
 class Policy(object):

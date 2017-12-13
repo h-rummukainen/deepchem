@@ -123,7 +123,7 @@ class PPO(object):
       in computing the PPO loss function, the probability ratio is clipped to the range
       (1-clipping_width, 1+clipping_width)
     discount_factor: float
-      the discount factor to use when computing rewards
+      the discount factor per time unit to use when computing rewards
     advantage_lambda: float
       the parameter for trading bias vs. variance in Generalized Advantage Estimation
     value_weight: float
@@ -457,10 +457,10 @@ class _Worker(object):
     with self.graph._get_tf("Graph").as_default():
       self.ppo._session.run(self.update_local_variables)
       initial_rnn_states = self.rnn_states
-      states, actions, action_prob, rewards, values = self.create_rollout()
+      states, actions, action_prob, rewards, durations, values = self.create_rollout()
       rollouts.append(
-          self.process_rollout(states, actions, action_prob, rewards, values,
-                               initial_rnn_states))
+          self.process_rollout(states, actions, action_prob, rewards,
+                               durations, values, initial_rnn_states))
       if self.ppo.use_hindsight:
         rollouts.append(
             self.process_rollout_with_hindsight(states, actions,
@@ -475,6 +475,7 @@ class _Worker(object):
     action_prob = []
     actions = []
     rewards = []
+    durations = []
     values = []
 
     # Generate the rollout.
@@ -496,7 +497,9 @@ class _Worker(object):
       actions.append(action)
       action_prob.append(probabilities[0][action])
       values.append(float(value))
-      rewards.append(self.env.step(action))
+      reward, duration = self.env.step_smdp(action)
+      rewards.append(reward)
+      durations.append(duration)
 
     # Compute an estimate of the reward for the rest of the episode.
 
@@ -511,25 +514,38 @@ class _Worker(object):
       self.rnn_states = self.graph.rnn_zero_states
     return states, np.array(
         actions, dtype=np.int32), np.array(action_prob), np.array(
-            rewards), np.array(values)
+            rewards), np.array(durations), np.array(values)
 
-  def process_rollout(self, states, actions, action_prob, rewards, values,
-                      initial_rnn_states):
+  def process_rollout(self, states, actions, action_prob, rewards, durations,
+                      values, initial_rnn_states):
     """Construct the arrays needed for training."""
 
     # Compute the discounted rewards and advantages.
 
+    discount_factors = self.ppo.discount_factor ** durations
     discounted_rewards = rewards.copy()
-    discounted_rewards[-1] += self.ppo.discount_factor * values[-1]
-    advantages = rewards - values[:-1] + self.ppo.discount_factor * np.array(
-        values[1:])
+    discounted_rewards[-1] += discount_factors[-1] * values[-1]
+    # step_advantage[i] =
+    #   - values[i] + rewards[i] + gamma**durations[i] * values[i+1]
+    advantages = rewards - values[:-1] + discount_factors * values[1:]
+    adv_lambda = self.ppo.advantage_lambda
     for j in range(len(rewards) - 1, 0, -1):
-      discounted_rewards[j -
-                         1] += self.ppo.discount_factor * discounted_rewards[j]
-      advantages[
-          j -
-          1] += self.ppo.discount_factor * self.ppo.advantage_lambda * advantages[
-              j]
+      # discounted_rewards[i] =
+      #   rewards[i] + gamma**durations[i] * rewards[i+1] + ...
+      #   + gamma**(durations[i] + ... + durations[n-2]) * rewards[n-1]
+      #   + gamma**(durations[i] + ... + durations[n-1]) * values[n]
+      # = rewards[i] + gamma**durations[i] * discounted_rewards[i+1]
+      discounted_rewards[j-1] += discount_factors[j-1] * discounted_rewards[j]
+
+      # generalized_advantage[i] =
+      #   step_advantage[i]
+      #   + lambda * gamma**durations[i] * step_advantage[i+1]
+      #   + ...
+      #   + lambda**(n-i) * gamma**(durations[i] + ... + durations[n-1])
+      #     * step_advantage[n]
+      # = step_advantage[i]
+      #   + lambda * gamma**durations[i] * generalized_advantage[i+1]
+      advantages[j-1] += adv_lambda * discount_factors[j-1] * advantages[j]
 
     # Convert the actions to one-hot.
 
