@@ -504,8 +504,7 @@ class _Worker(object):
       final_value = 0.0
     else:
       feed_dict = self.create_feed_dict(self.env.state)
-      final_value = self.ppo.discount_factor * float(
-          session.run(self.value.out_tensor, feed_dict))
+      final_value = float(session.run(self.value.out_tensor, feed_dict))
     values.append(final_value)
     if self.env.terminated:
       self.env.reset()
@@ -521,7 +520,7 @@ class _Worker(object):
     # Compute the discounted rewards and advantages.
 
     discounted_rewards = rewards.copy()
-    discounted_rewards[-1] += values[-1]
+    discounted_rewards[-1] += self.ppo.discount_factor * values[-1]
     advantages = rewards - values[:-1] + self.ppo.discount_factor * np.array(
         values[1:])
     for j in range(len(rewards) - 1, 0, -1):
