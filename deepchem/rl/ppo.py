@@ -100,7 +100,8 @@ class PPO(object):
                optimizer=None,
                model_dir=None,
                use_hindsight=False,
-               zero_terminal=True):
+               zero_terminal=True,
+               callbacks=[]):
     """Create an object for optimizing a policy.
 
     Parameters
@@ -136,6 +137,11 @@ class PPO(object):
       the directory in which the model will be saved.  If None, a temporary directory will be created.
     use_hindsight: bool
       if True, use Hindsight Experience Replay
+    zero_terminal: bool
+      whether terminal states should be at zero value (default); if False, the
+      environment is assumed to terminate at any state on external conditions.
+    callbacks: list
+      each rollout is passed to the on_callback method of each callback
     """
     self._env = env
     self._policy = policy
@@ -150,6 +156,7 @@ class PPO(object):
     self.entropy_weight = entropy_weight
     self.use_hindsight = use_hindsight
     self.zero_terminal = zero_terminal
+    self.callbacks = callbacks
     self._state_is_list = isinstance(env.state_shape[0], collections.Sequence)
     if optimizer is None:
       self._optimizer = Adam(learning_rate=0.001, beta1=0.9, beta2=0.999)
@@ -253,6 +260,16 @@ class PPO(object):
           pool.map(lambda x: rollouts.extend(x.run()), workers)
         else:
           rollouts.extend(workers[0].run())
+        for (initial_rnn_states, state_arrays, discounted_rewards,
+             actions_matrix, action_prob, advantages,
+             rewards, durations) in rollouts:
+          for callback in self.callbacks:
+            callback.on_rollout({
+              'state_arrays': state_arrays,
+              'discounted_rewards': discounted_rewards,
+              'actions_matrix': actions_matrix, 'action_prob': action_prob,
+              'advantages': advantages, 'rewards': rewards,
+              'durations': durations}, step_count)
 
         # Perform optimization.
 
@@ -460,11 +477,13 @@ class _Worker(object):
       states, actions, action_prob, rewards, durations, values = self.create_rollout()
       rollouts.append(
           self.process_rollout(states, actions, action_prob, rewards,
-                               durations, values, initial_rnn_states))
+                               durations, values, initial_rnn_states)
+          + (rewards, durations))
       if self.ppo.use_hindsight:
         rollouts.append(
             self.process_rollout_with_hindsight(states, actions,
-                                                initial_rnn_states))
+                                                initial_rnn_states)
+            + (rewards, durations))
     return rollouts
 
   def create_rollout(self):
