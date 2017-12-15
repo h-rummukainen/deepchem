@@ -262,14 +262,14 @@ class PPO(object):
           rollouts.extend(workers[0].run())
         for (initial_rnn_states, state_arrays, discounted_rewards,
              actions_matrix, action_prob, advantages,
-             rewards, durations) in rollouts:
+             rewards, durations, actions) in rollouts:
           for callback in self.callbacks:
             callback.on_rollout({
               'state_arrays': state_arrays,
               'discounted_rewards': discounted_rewards,
               'actions_matrix': actions_matrix, 'action_prob': action_prob,
               'advantages': advantages, 'rewards': rewards,
-              'durations': durations}, step_count)
+              'durations': durations, 'actions': actions}, step_count)
 
         # Perform optimization.
 
@@ -478,12 +478,12 @@ class _Worker(object):
       rollouts.append(
           self.process_rollout(states, actions, action_prob, rewards,
                                durations, values, initial_rnn_states)
-          + (rewards, durations))
+          + (rewards, durations, actions))
       if self.ppo.use_hindsight:
         rollouts.append(
             self.process_rollout_with_hindsight(states, actions,
                                                 initial_rnn_states)
-            + (rewards, durations))
+            + (rewards, durations, actions))
     return rollouts
 
   def create_rollout(self):
