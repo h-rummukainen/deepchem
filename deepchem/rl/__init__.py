@@ -126,10 +126,34 @@ class Environment(object):
     return (self.step(action), 1.0)
 
 
+def slice_dim(size, index):
+    if isinstance(index, slice):
+      if not (index.step is None or index.step == 1):
+        raise ValueError("Stride not implemented: "+repr(index.step))
+      low = (0 if index.start is None else
+             index.start + size if index.start < 0 else
+             index.start)
+      high = (size if index.stop is None else
+              index.stop + size if index.stop < 0 else
+              index.stop)
+      return high - low
+    elif index is None:
+      return size
+    elif isinstance(index, int):
+      return 1
+    else:
+      raise ValueError("Not a valid index: "+repr(index))
+
+def slice_shape(shape, indices):
+  if len(shape) != len(indices):
+    raise ValueError("slice_shape: Number of indices should match rank")
+  return tuple(slice_dim(s, i)
+               for s, i in zip(shape, indices))
+
 class GymEnvironment(Environment):
   """This is a convenience class for working with environments from OpenAI Gym."""
 
-  def __init__(self, name, env=None, state_dtype=None):
+  def __init__(self, name, env=None, state_dtype=None, state_slices=None):
     """Create an Environment wrapping the OpenAI Gym environment with a specified name."""
     if env is None:
       import gym
@@ -137,16 +161,25 @@ class GymEnvironment(Environment):
     else:
       self.env = env
     self.name = name
-    super(GymEnvironment, self).__init__(self.env.observation_space.shape,
+    self._state_slices = state_slices
+    obs_shape = self.env.observation_space.shape
+    if state_slices:
+      state_shapes = [slice_shape(obs_shape, ss)
+                      for ss in state_slices]
+    else:
+      state_shapes = obs_shape
+    super(GymEnvironment, self).__init__(state_shapes,
                                          self.env.action_space.n,
                                          state_dtype=state_dtype)
 
   def reset(self):
-    self._state = self.env.reset()
+    state = self.env.reset()
+    self._state = self._mangle_state(state)
     self._terminated = False
 
   def step(self, action):
-    self._state, reward, self._terminated, info = self.env.step(action)
+    state, reward, self._terminated, info = self.env.step(action)
+    self._state = self._mangle_state(state)
     duration = info.get('step_time', 1.0)
     if duration != 1.0:
       raise Exception("Trying to step in discrete time, but got duration {}"
@@ -154,9 +187,17 @@ class GymEnvironment(Environment):
     return reward
 
   def step_smdp(self, action):
-    self._state, reward, self._terminated, info = self.env.step(action)
+    state, reward, self._terminated, info = self.env.step(action)
+    self._state = self._mangle_state(state)
     duration = info.get('step_time', 1.0)
     return (reward, duration)
+
+  def _mangle_state(self, state):
+    if self._state_slices:
+      return [state[ss].astype(dt)
+              for ss, dt in zip(self._state_slices, self._state_dtype)]
+    else:
+      return state
 
 
 class Policy(object):
