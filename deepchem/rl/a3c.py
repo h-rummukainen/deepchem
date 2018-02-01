@@ -88,7 +88,8 @@ class A3C(object):
                entropy_weight=0.01,
                optimizer=None,
                model_dir=None,
-               use_hindsight=False):
+               use_hindsight=False,
+               zero_terminal=True):
     """Create an object for optimizing a policy.
 
     Parameters
@@ -114,6 +115,9 @@ class A3C(object):
       the directory in which the model will be saved.  If None, a temporary directory will be created.
     use_hindsight: bool
       if True, use Hindsight Experience Replay
+    zero_terminal: bool
+      whether terminal states should be at zero value (default); if False, the
+      environment is assumed to terminate at any state on external conditions.
     """
     self._env = env
     self._policy = policy
@@ -123,6 +127,7 @@ class A3C(object):
     self.value_weight = value_weight
     self.entropy_weight = entropy_weight
     self.use_hindsight = use_hindsight
+    self.zero_terminal = zero_terminal
     self._state_is_list = isinstance(env.state_shape[0], collections.Sequence)
     if optimizer is None:
       self._optimizer = Adam(learning_rate=0.001, beta1=0.9, beta2=0.999)
@@ -399,12 +404,12 @@ class _Worker(object):
 
     # Compute an estimate of the reward for the rest of the episode.
 
-    if not self.env.terminated:
+    if self.env.terminated and self.a3c.zero_terminal:
+      final_value = 0.0
+    else:
       feed_dict = self.create_feed_dict(self.env.state)
       final_value = self.a3c.discount_factor * float(
           session.run(self.value.out_tensor, feed_dict))
-    else:
-      final_value = 0.0
     values.append(final_value)
     if self.env.terminated:
       self.env.reset()
