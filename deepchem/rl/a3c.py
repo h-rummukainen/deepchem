@@ -366,8 +366,8 @@ class _Worker(object):
       while step_count[0] < total_steps:
         self.a3c._session.run(self.update_local_variables)
         initial_rnn_states = self.rnn_states
-        states, actions, rewards, values = self.create_rollout()
-        self.process_rollout(states, actions, rewards, values,
+        states, actions, rewards, durations, values = self.create_rollout()
+        self.process_rollout(states, actions, rewards, durations, values,
                              initial_rnn_states, step_count[0])
         if self.a3c.use_hindsight:
           self.process_rollout_with_hindsight(states, actions,
@@ -381,6 +381,7 @@ class _Worker(object):
     states = []
     actions = []
     rewards = []
+    durations = []
     values = []
 
     # Generate the rollout.
@@ -400,7 +401,9 @@ class _Worker(object):
       action = np.random.choice(np.arange(n_actions), p=probabilities[0])
       actions.append(action)
       values.append(float(value))
-      rewards.append(self.env.step(action))
+      reward, duration = self.env.step_smdp(action)
+      rewards.append(reward)
+      durations.append(duration)
 
     # Compute an estimate of the reward for the rest of the episode.
 
@@ -408,33 +411,44 @@ class _Worker(object):
       final_value = 0.0
     else:
       feed_dict = self.create_feed_dict(self.env.state)
-      final_value = self.a3c.discount_factor * float(
-          session.run(self.value.out_tensor, feed_dict))
+      final_value = float(session.run(self.value.out_tensor, feed_dict))
     values.append(final_value)
     if self.env.terminated:
       self.env.reset()
       self.rnn_states = self.graph.rnn_zero_states
-    return states, actions, np.array(
-        rewards, dtype=np.float32), np.array(
-            values, dtype=np.float32)
+    return states, actions, np.array(rewards, dtype=np.float32), np.array(
+      durations, dtype=np.float32), np.array(values, dtype=np.float32)
 
-  def process_rollout(self, states, actions, rewards, values,
+  def process_rollout(self, states, actions, rewards, durations, values,
                       initial_rnn_states, step_count):
     """Train the network based on a rollout."""
 
     # Compute the discounted rewards and advantages.
 
+    discount_factors = self.a3c.discount_factor ** durations
     discounted_rewards = rewards.copy()
-    discounted_rewards[-1] += values[-1]
-    advantages = rewards - values[:-1] + self.a3c.discount_factor * np.array(
-        values[1:])
+    discounted_rewards[-1] += discount_factors[-1] * values[-1]
+    # step_advantage[i] =
+    #   - values[i] + rewards[i] + gamma**durations[i] * values[i+1]
+    advantages = rewards - values[:-1] + discount_factors * values[1:]
+    adv_lambda = self.a3c.advantage_lambda
     for j in range(len(rewards) - 1, 0, -1):
-      discounted_rewards[j -
-                         1] += self.a3c.discount_factor * discounted_rewards[j]
-      advantages[
-          j -
-          1] += self.a3c.discount_factor * self.a3c.advantage_lambda * advantages[
-              j]
+      # discounted_rewards[i] =
+      #   rewards[i] + gamma**durations[i] * rewards[i+1] + ...
+      #   + gamma**(durations[i] + ... + durations[n-2]) * rewards[n-1]
+      #   + gamma**(durations[i] + ... + durations[n-1]) * values[n]
+      # = rewards[i] + gamma**durations[i] * discounted_rewards[i+1]
+      discounted_rewards[j-1] += discount_factors[j-1] * discounted_rewards[j]
+
+      # generalized_advantage[i] =
+      #   step_advantage[i]
+      #   + lambda * gamma**durations[i] * step_advantage[i+1]
+      #   + ...
+      #   + lambda**(n-i) * gamma**(durations[i] + ... + durations[n-1])
+      #     * step_advantage[n]
+      # = step_advantage[i]
+      #   + lambda * gamma**durations[i] * generalized_advantage[i+1]
+      advantages[j-1] += adv_lambda * discount_factors[j-1] * advantages[j]
 
     # Convert the actions to one-hot.
 
