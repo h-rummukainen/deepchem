@@ -89,7 +89,8 @@ class A3C(object):
                optimizer=None,
                model_dir=None,
                use_hindsight=False,
-               zero_terminal=True):
+               zero_terminal=True,
+               callbacks=[]):
     """Create an object for optimizing a policy.
 
     Parameters
@@ -118,6 +119,8 @@ class A3C(object):
     zero_terminal: bool
       whether terminal states should be at zero value (default); if False, the
       environment is assumed to terminate at any state on external conditions.
+    callbacks: list
+      each rollout is passed to the on_callback method of each callback
     """
     self._env = env
     self._policy = policy
@@ -128,6 +131,7 @@ class A3C(object):
     self.entropy_weight = entropy_weight
     self.use_hindsight = use_hindsight
     self.zero_terminal = zero_terminal
+    self.callbacks = callbacks
     self._state_is_list = isinstance(env.state_shape[0], collections.Sequence)
     if optimizer is None:
       self._optimizer = Adam(learning_rate=0.001, beta1=0.9, beta2=0.999)
@@ -481,6 +485,15 @@ class _Worker(object):
     feed_dict[self.actions.out_tensor] = actions_matrix
     feed_dict[self.advantages.out_tensor] = advantages
     feed_dict[self.global_step] = step_count
+
+    for callback in self.a3c.callbacks:
+      callback.on_rollout({
+        'state_arrays': state_arrays,
+        'discounted_rewards': discounted_rewards,
+        'actions_matrix': actions_matrix,
+        'advantages': advantages, 'rewards': rewards,
+        'durations': durations, 'actions': actions}, step_count)
+
     self.a3c._session.run(self.train_op, feed_dict=feed_dict)
 
   def process_rollout_with_hindsight(self, states, actions, initial_rnn_states,
