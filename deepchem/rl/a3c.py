@@ -89,6 +89,7 @@ class A3C(object):
                optimizer=None,
                model_dir=None,
                use_hindsight=False,
+               worker_count=multiprocessing.cpu_count(),
                zero_terminal=True,
                callbacks=[]):
     """Create an object for optimizing a policy.
@@ -130,6 +131,7 @@ class A3C(object):
     self.value_weight = value_weight
     self.entropy_weight = entropy_weight
     self.use_hindsight = use_hindsight
+    self.worker_count = worker_count
     self.zero_terminal = zero_terminal
     self.callbacks = callbacks
     self._state_is_list = isinstance(env.state_shape[0], collections.Sequence)
@@ -205,7 +207,7 @@ class A3C(object):
       step_count = [0]
       workers = []
       threads = []
-      for i in range(multiprocessing.cpu_count()):
+      for i in range(self.worker_count):
         workers.append(_Worker(self, i))
       self._session.run(tf.global_variables_initializer())
       if restore:
