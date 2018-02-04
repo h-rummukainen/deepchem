@@ -1,23 +1,19 @@
+import collections
+import os
 import pickle
 import threading
 import time
 
-import collections
 import numpy as np
-import os
-import six
 import tensorflow as tf
-from tensorflow.python.framework.errors_impl import OutOfRangeError
+from tensorflow.python.pywrap_tensorflow_internal import NewCheckpointReader
 
 from deepchem.data import NumpyDataset
-from deepchem.metrics import to_one_hot, from_one_hot
 from deepchem.models.models import Model
 from deepchem.models.tensorgraph.layers import InputFifoQueue, Label, Feature, Weights, Constant
 from deepchem.models.tensorgraph.optimizers import Adam
 from deepchem.trans import undo_transforms
 from deepchem.utils.evaluate import GeneratorEvaluator
-from deepchem.feat.graph_features import ConvMolFeaturizer
-from deepchem.data.data_loader import featurize_smiles_np
 
 
 class TensorGraph(Model):
@@ -120,7 +116,8 @@ class TensorGraph(Model):
           checkpoint_interval=1000,
           deterministic=False,
           restore=False,
-          submodel=None):
+          submodel=None,
+          **kwargs):
     """Train this model on a dataset.
 
     Parameters
@@ -190,7 +187,8 @@ class TensorGraph(Model):
         if submodel.loss is not None:
           loss = submodel.loss
       if checkpoint_interval > 0:
-        saver = tf.train.Saver(max_to_keep=max_checkpoints_to_keep)
+        saver = tf.train.Saver(
+            max_to_keep=max_checkpoints_to_keep, save_relative_paths=True)
       if restore:
         self.restore()
       avg_loss, n_averaged_batches = 0.0, 0.0
@@ -765,16 +763,37 @@ class TensorGraph(Model):
     saver = tf.train.Saver(max_to_keep=max_checkpoints_to_keep)
     saver.save(self.session, self.save_file, global_step=self.global_step)
 
-  def restore(self):
-    """Reload the values of all variables from the most recent checkpoint file."""
+  def get_checkpoints(self):
+    """Get a list of all available checkpoint files."""
+    return tf.train.get_checkpoint_state(
+        self.model_dir).all_model_checkpoint_paths
+
+  def restore(self, checkpoint=None):
+    """Reload the values of all variables from a checkpoint file.
+
+    Parameters
+    ----------
+    checkpoint: str
+      the path to the checkpoint file to load.  If this is None, the most recent
+      checkpoint will be chosen automatically.  Call get_checkpoints() to get a
+      list of all available checkpoints.
+    """
     if not self.built:
       self.build()
-    last_checkpoint = tf.train.latest_checkpoint(self.model_dir)
-    if last_checkpoint is None:
+    if checkpoint is None:
+      checkpoint = tf.train.latest_checkpoint(self.model_dir)
+    if checkpoint is None:
       raise ValueError('No checkpoint found')
     with self._get_tf("Graph").as_default():
-      saver = tf.train.Saver()
-      saver.restore(self.session, last_checkpoint)
+      reader = NewCheckpointReader(checkpoint)
+      var_names = set([x for x in reader.get_variable_to_shape_map()])
+      var_map = {
+          x.op.name: x
+          for x in tf.global_variables()
+          if x.op.name in var_names
+      }
+      saver = tf.train.Saver(var_list=var_map)
+      saver.restore(self.session, checkpoint)
 
   def get_num_tasks(self):
     return len(self.outputs)
@@ -785,16 +804,17 @@ class TensorGraph(Model):
     return self.layers[pre_q_name]
 
   @staticmethod
-  def load_from_dir(model_dir):
+  def load_from_dir(model_dir, restore=True):
     pickle_name = os.path.join(model_dir, "model.pickle")
     with open(pickle_name, 'rb') as fout:
       tensorgraph = pickle.load(fout)
       tensorgraph.built = False
       tensorgraph.model_dir = model_dir
-      try:
-        tensorgraph.restore()
-      except ValueError:
-        pass  # No checkpoint to load
+      if restore:
+        try:
+          tensorgraph.restore()
+        except ValueError:
+          pass  # No checkpoint to load
       return tensorgraph
 
   def __del__(self):
