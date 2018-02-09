@@ -22,6 +22,7 @@ class PPOLoss(Layer):
     self.value_weight = value_weight
     self.entropy_weight = entropy_weight
     self.clipping_width = clipping_width
+    self.components = dict()
 
   def create_tensor(self, **kwargs):
     reward, action, prob, value, advantage, old_prob = [
@@ -37,6 +38,9 @@ class PPOLoss(Layer):
         tf.minimum(ratio * advantage, clipped_ratio * advantage))
     value_loss = tf.reduce_mean(tf.square(reward - value))
     entropy = -tf.reduce_mean(tf.reduce_sum(prob * tf.log(prob), axis=1))
+    self.components = { 'policy_loss': policy_loss, 
+                        'value_loss': value_loss,
+                        'entropy': entropy }
     self.out_tensor = policy_loss + self.value_weight * value_loss - self.entropy_weight * entropy
     return self.out_tensor
 
@@ -164,7 +168,7 @@ class PPO(object):
       self._optimizer = optimizer
     (self._graph, self._features, self._rewards, self._actions,
      self._action_prob, self._value, self._advantages,
-     self._old_action_prob) = self._build_graph(None, 'global', model_dir)
+     self._old_action_prob, self._loss_components) = self._build_graph(None, 'global', model_dir)
     with self._graph._get_tf("Graph").as_default():
       self._session = tf.Session()
       self._train_op = self._graph._get_tf('Optimizer').minimize(
@@ -213,7 +217,8 @@ class PPO(object):
     with graph._get_tf("Graph").as_default():
       with tf.variable_scope(scope):
         graph.build()
-    return graph, features, rewards, actions, action_prob, value, advantages, old_action_prob
+    assert len(loss.components) > 0
+    return graph, features, rewards, actions, action_prob, value, advantages, old_action_prob, loss.components
 
   def fit(self,
           total_steps,
@@ -260,16 +265,6 @@ class PPO(object):
           pool.map(lambda x: rollouts.extend(x.run()), workers)
         else:
           rollouts.extend(workers[0].run())
-        for (initial_rnn_states, state_arrays, discounted_rewards,
-             actions_matrix, action_prob, advantages,
-             rewards, durations, actions) in rollouts:
-          for callback in self.callbacks:
-            callback.on_rollout({
-              'state_arrays': state_arrays,
-              'discounted_rewards': discounted_rewards,
-              'actions_matrix': actions_matrix, 'action_prob': action_prob,
-              'advantages': advantages, 'rewards': rewards,
-              'durations': durations, 'actions': actions}, step_count)
 
         # Perform optimization.
 
@@ -294,7 +289,21 @@ class PPO(object):
             feed_dict[self._advantages.out_tensor] = advantages
             feed_dict[self._old_action_prob.out_tensor] = action_prob
             feed_dict[self._graph.get_global_step()] = step_count
-            self._session.run(self._train_op, feed_dict=feed_dict)
+            _, lcs = self._session.run([self._train_op, self._loss_components],
+                                       feed_dict=feed_dict)
+            for callback in self.callbacks:
+              callback.on_training_batch(lcs, step_count)
+
+        for (initial_rnn_states, state_arrays, discounted_rewards,
+             actions_matrix, action_prob, advantages,
+             rewards, durations, actions) in rollouts:
+          for callback in self.callbacks:
+            callback.on_rollout({
+              'state_arrays': state_arrays,
+              'discounted_rewards': discounted_rewards,
+              'actions_matrix': actions_matrix, 'action_prob': action_prob,
+              'advantages': advantages, 'rewards': rewards,
+              'durations': durations, 'actions': actions}, step_count)
 
         # Update the number of steps taken so far and perform checkpointing.
 
@@ -458,7 +467,7 @@ class _Worker(object):
     self.scope = 'worker%d' % index
     self.env = env
     self.env.reset()
-    self.graph, self.features, self.rewards, self.actions, self.action_prob, self.value, self.advantages, self.old_action_prob = ppo._build_graph(
+    self.graph, self.features, self.rewards, self.actions, self.action_prob, self.value, self.advantages, self.old_action_prob, self._loss_components = ppo._build_graph(
         ppo._graph._get_tf('Graph'), self.scope, None)
     self.rnn_states = self.graph.rnn_zero_states
     with ppo._graph._get_tf("Graph").as_default():

@@ -20,6 +20,7 @@ class A3CLossDiscrete(Layer):
     super(A3CLossDiscrete, self).__init__(**kwargs)
     self.value_weight = value_weight
     self.entropy_weight = entropy_weight
+    self.components = dict()
 
   def create_tensor(self, **kwargs):
     reward, action, prob, value, advantage = [
@@ -31,6 +32,9 @@ class A3CLossDiscrete(Layer):
         advantage * tf.reduce_sum(action * log_prob, axis=1))
     value_loss = tf.reduce_mean(tf.square(reward - value))
     entropy = -tf.reduce_mean(tf.reduce_sum(prob * log_prob, axis=1))
+    self.components = { 'policy_loss': policy_loss, 
+                        'value_loss': value_loss,
+                        'entropy': entropy }
     self.out_tensor = policy_loss + self.value_weight * value_loss - self.entropy_weight * entropy
     return self.out_tensor
 
@@ -42,6 +46,7 @@ class A3CLossContinuous(Layer):
     super(A3CLossContinuous, self).__init__(**kwargs)
     self.value_weight = value_weight
     self.entropy_weight = entropy_weight
+    self.components = dict()
 
   def create_tensor(self, **kwargs):
     reward, action, mean, std, value, advantage = [
@@ -54,6 +59,9 @@ class A3CLossContinuous(Layer):
     value_loss = tf.reduce_mean(tf.square(reward - value))
     entropy = tf.reduce_mean(distrib.entropy())
     self.out_tensor = policy_loss + self.value_weight * value_loss - self.entropy_weight * entropy
+    self.components = { 'policy_loss': policy_loss, 
+                        'value_loss': value_loss,
+                        'entropy': entropy }
     return self.out_tensor
 
 
@@ -171,10 +179,11 @@ class A3C(object):
     if self.continuous:
       (self._graph, self._features, self._rewards, self._actions,
        self._action_mean, self._action_std, self._value,
-       self._advantages) = fields
+       self._advantages, self._loss_components) = fields
     else:
       (self._graph, self._features, self._rewards, self._actions,
-       self._action_prob, self._value, self._advantages) = fields
+       self._action_prob, self._value, self._advantages,
+       self._loss_components) = fields
     with self._graph._get_tf("Graph").as_default():
       self._session = tf.Session()
     self._rnn_states = self._graph.rnn_zero_states
@@ -229,9 +238,9 @@ class A3C(object):
       with tf.variable_scope(scope):
         graph.build()
     if self.continuous:
-      return graph, features, rewards, actions, action_mean, action_std, value, advantages
+      return graph, features, rewards, actions, action_mean, action_std, value, advantages, loss.components
     else:
-      return graph, features, rewards, actions, action_prob, value, advantages
+      return graph, features, rewards, actions, action_prob, value, advantages, loss.components
 
   def fit(self,
           total_steps,
@@ -420,9 +429,9 @@ class _Worker(object):
     self.env.reset()
     fields = a3c._build_graph(a3c._graph._get_tf('Graph'), self.scope, None)
     if a3c.continuous:
-      self.graph, self.features, self.rewards, self.actions, self.action_mean, self.action_std, self.value, self.advantages = fields
+      self.graph, self.features, self.rewards, self.actions, self.action_mean, self.action_std, self.value, self.advantages, self.loss_components = fields
     else:
-      self.graph, self.features, self.rewards, self.actions, self.action_prob, self.value, self.advantages = fields
+      self.graph, self.features, self.rewards, self.actions, self.action_prob, self.value, self.advantages, self.loss_components = fields
     self.rnn_states = self.graph.rnn_zero_states
     with a3c._graph._get_tf("Graph").as_default():
       local_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES,
@@ -565,15 +574,16 @@ class _Worker(object):
     feed_dict[self.advantages] = advantages
     feed_dict[self.global_step] = step_count
 
+    _, losses = self.a3c._session.run([self.train_op, self.loss_components],
+                                      feed_dict=feed_dict)
+    info = { 'state_arrays': state_arrays,
+             'discounted_rewards': discounted_rewards,
+             'actions_matrix': actions_matrix, 'advantages': advantages,
+             'rewards': rewards, 'durations': durations, 'actions': actions }
     for callback in self.a3c.callbacks:
-      callback.on_rollout({
-        'state_arrays': state_arrays,
-        'discounted_rewards': discounted_rewards,
-        'actions_matrix': actions_matrix,
-        'advantages': advantages, 'rewards': rewards,
-        'durations': durations, 'actions': actions}, step_count)
+      callback.on_training_batch(losses, step_count)
+      callback.on_rollout(info, step_count)
 
-    self.a3c._session.run(self.train_op, feed_dict=feed_dict)
 
   def process_rollout_with_hindsight(self, states, actions, initial_rnn_states,
                                      step_count):
