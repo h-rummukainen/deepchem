@@ -464,7 +464,8 @@ class TensorGraph(Model):
     if self.built:
       return
     with self._get_tf("Graph").as_default():
-      self._training_placeholder = tf.placeholder(dtype=tf.float32, shape=())
+      self._training_placeholder = tf.placeholder(dtype=tf.float32, shape=(),
+                                                  name='training')
       if self.random_seed is not None:
         tf.set_random_seed(self.random_seed)
       self._install_queue()
