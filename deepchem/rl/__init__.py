@@ -236,6 +236,11 @@ class GymEnvironment(Environment):
     duration = info.get('step_time', 1.0)
     return (reward, duration)
 
+  def step_info(self, action):
+    state, reward, self._terminated, info = self.env.step(action)
+    self._state = self._mangle_state(state)
+    return (reward, info)
+
   def _mangle_state(self, state):
     if self._state_slices:
       return [state[ss].astype(dt)
