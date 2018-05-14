@@ -288,10 +288,11 @@ class MCTS(object):
       saver = tf.train.Saver(variables)
       saver.restore(self._graph.session, last_checkpoint)
 
-  def _create_feed_dict(self, state):
+  def _create_feed_dict(self, state, training=False):
     """Create a feed dict for use by predict() or select_action()."""
     feed_dict = dict((f.out_tensor, np.expand_dims(s, axis=0))
                      for f, s in zip(self._features, state))
+    feed_dict[self._graph._training_placeholder] = float(training)
     return feed_dict
 
   def _run_episodes(self, steps, temperature, saver, adapt_puct):
@@ -337,6 +338,7 @@ class MCTS(object):
           feed_dict[self._search_prob] = np.stack(buffer[j][1] for j in indices)
           feed_dict[self._search_value] = np.array(
               [buffer[j][2] for j in indices])
+          feed_dict[self._graph._training_placeholder] = 1.0
           yield feed_dict
 
       loss = self._graph.fit_generator(

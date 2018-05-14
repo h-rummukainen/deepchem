@@ -374,7 +374,7 @@ class A3C(object):
       saver = tf.train.Saver(variables)
       saver.restore(self._session, last_checkpoint)
 
-  def _create_feed_dict(self, state, use_saved_states):
+  def _create_feed_dict(self, state, use_saved_states, training=False):
     """Create a feed dict for use by predict() or select_action()."""
     feed_dict = dict((f.out_tensor, np.expand_dims(s, axis=0))
                      for f, s in zip(self._features, state))
@@ -384,6 +384,7 @@ class A3C(object):
       rnn_states = self._graph.rnn_zero_states
     for (placeholder, value) in zip(self._graph.rnn_initial_states, rnn_states):
       feed_dict[placeholder] = value
+    feed_dict[self._graph._training_placeholder] = float(training)
     return feed_dict
 
   def _predict_outputs(self, outputs, state, use_saved_states, save_states):
@@ -573,6 +574,7 @@ class _Worker(object):
     feed_dict[self.actions] = actions_matrix
     feed_dict[self.advantages] = advantages
     feed_dict[self.global_step] = step_count
+    feed_dict[self.graph._training_placeholder] = 1.0
 
     _, losses = self.a3c._session.run([self.train_op, self.loss_components],
                                       feed_dict=feed_dict)
@@ -603,12 +605,13 @@ class _Worker(object):
       feed_dict[placeholder] = value
     for f, s in zip(self.features, state_arrays):
       feed_dict[f.out_tensor] = s
+    feed_dict[self.graph._training_placeholder] = 0.0
     values = self.a3c._session.run(self.value.out_tensor, feed_dict=feed_dict)
     values = np.append(values.flatten(), 0.0)
     self.process_rollout(hindsight_states, actions, np.array(rewards),
                          np.array(values), initial_rnn_states, step_count)
 
-  def create_feed_dict(self, state):
+  def create_feed_dict(self, state, training=False):
     """Create a feed dict for use during a rollout."""
     if not self.a3c._state_is_list:
       state = [state]
@@ -617,4 +620,5 @@ class _Worker(object):
     for (placeholder, value) in zip(self.graph.rnn_initial_states,
                                     self.rnn_states):
       feed_dict[placeholder] = value
+    feed_dict[self.graph._training_placeholder] = float(training)
     return feed_dict

@@ -289,6 +289,7 @@ class PPO(object):
             feed_dict[self._advantages.out_tensor] = advantages
             feed_dict[self._old_action_prob.out_tensor] = action_prob
             feed_dict[self._graph.get_global_step()] = step_count
+            feed_dict[self._graph._training_placeholder] = 1.0
             _, lcs = self._session.run([self._train_op, self._loss_components],
                                        feed_dict=feed_dict)
             for callback in self.callbacks:
@@ -445,7 +446,7 @@ class PPO(object):
       saver = tf.train.Saver(variables)
       saver.restore(self._session, last_checkpoint)
 
-  def _create_feed_dict(self, state, use_saved_states):
+  def _create_feed_dict(self, state, use_saved_states, training=False):
     """Create a feed dict for use by predict() or select_action()."""
     feed_dict = dict((f.out_tensor, np.expand_dims(s, axis=0))
                      for f, s in zip(self._features, state))
@@ -455,6 +456,7 @@ class PPO(object):
       rnn_states = self._graph.rnn_zero_states
     for (placeholder, value) in zip(self._graph.rnn_initial_states, rnn_states):
       feed_dict[placeholder] = value
+    feed_dict[self._graph._training_placeholder] = float(training)
     return feed_dict
 
 
@@ -614,6 +616,7 @@ class _Worker(object):
     for placeholder, value in zip(self.graph.rnn_initial_states,
                                   initial_rnn_states):
       feed_dict[placeholder] = value
+    feed_dict[self.graph._training_placeholder] = 0.0
     for f, s in zip(self.features, state_arrays):
       feed_dict[f.out_tensor] = s
     values, probabilities = self.ppo._session.run(
@@ -625,7 +628,7 @@ class _Worker(object):
                                 np.array(rewards),
                                 np.array(values), initial_rnn_states)
 
-  def create_feed_dict(self, state):
+  def create_feed_dict(self, state, training=False):
     """Create a feed dict for use during a rollout."""
     if not self.ppo._state_is_list:
       state = [state]
@@ -634,4 +637,5 @@ class _Worker(object):
     for (placeholder, value) in zip(self.graph.rnn_initial_states,
                                     self.rnn_states):
       feed_dict[placeholder] = value
+    feed_dict[self.graph._training_placeholder] = float(training)
     return feed_dict
