@@ -533,12 +533,19 @@ class _Worker(object):
 
     # Compute an estimate of the reward for the rest of the episode.
 
-    if self.env.terminated and self.ppo.zero_terminal:
-      final_value = 0.0
+    if self.env.terminated:
+      if self.ppo.zero_terminal:
+        values.append(0.0)
+      else:
+        states.pop()
+        actions.pop()
+        action_prob.pop()
+        rewards.pop()
+        durations.pop()
     else:
       feed_dict = self.create_feed_dict(self.env.state)
       final_value = float(session.run(self.value.out_tensor, feed_dict))
-    values.append(final_value)
+      values.append(final_value)
     if self.env.terminated:
       self.env.reset()
       self.rnn_states = self.graph.rnn_zero_states
