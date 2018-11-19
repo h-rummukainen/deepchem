@@ -255,6 +255,7 @@ class PPO(object):
       variables = tf.get_collection(
           tf.GraphKeys.GLOBAL_VARIABLES, scope='global')
       saver = tf.train.Saver(variables, max_to_keep=max_checkpoints_to_keep)
+      saver_b = tf.train.Saver(variables, max_to_keep=max_checkpoints_to_keep)
       checkpoint_index = 0
       checkpoint_time = time.time()
       while step_count < total_steps:
@@ -295,11 +296,12 @@ class PPO(object):
             for callback in self.callbacks:
               callback.on_training_batch(lcs, step_count)
 
+        save_as_best = False
         for (initial_rnn_states, state_arrays, discounted_rewards,
              actions_matrix, action_prob, advantages,
              rewards, durations, actions) in rollouts:
           for callback in self.callbacks:
-            callback.on_rollout({
+            save_as_best = save_as_best or callback.on_rollout({
               'state_arrays': state_arrays,
               'discounted_rewards': discounted_rewards,
               'actions_matrix': actions_matrix, 'action_prob': action_prob,
@@ -320,6 +322,13 @@ class PPO(object):
               global_step=checkpoint_index)
           checkpoint_index += 1
           checkpoint_time = time.time()
+
+        if save_as_best:
+          saver_b.save(
+            self._session,
+            self._graph.save_file + '_b',
+            global_step=step_count,
+            latest_filename='checkpoint_b')
 
   def _iter_batches(self, rollouts):
     """Given a set of rollouts, merge them into batches for optimization."""
@@ -437,9 +446,12 @@ class PPO(object):
 
   def restore(self):
     """Reload the model parameters from the most recent checkpoint file."""
-    last_checkpoint = tf.train.latest_checkpoint(self._graph.model_dir)
+    last_checkpoint = (tf.train.latest_checkpoint(self._graph.model_dir,
+                                                 'checkpoint_b') or
+                       tf.train.latest_checkpoint(self._graph.model_dir))
     if last_checkpoint is None:
       raise ValueError('No checkpoint found')
+    print("Restoring checkpoint: {}".format(last_checkpoint))
     with self._graph._get_tf("Graph").as_default():
       variables = tf.get_collection(
           tf.GraphKeys.GLOBAL_VARIABLES, scope='global')
